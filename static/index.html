@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Secure RAG Assistant</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 40px auto;
+            padding: 0 20px;
+            background: #f7f7f7;
+        }
+
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+        }
+
+        h1 {
+            margin-top: 0;
+        }
+
+        #user {
+            background: #f0f4f8;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        textarea {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 12px;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            resize: vertical;
+            min-height: 80px;
+        }
+
+        button {
+            margin-top: 10px;
+            padding: 10px 18px;
+            border: none;
+            border-radius: 8px;
+            background: #2563eb;
+            color: white;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background: #1d4ed8;
+        }
+
+        #answer {
+            margin-top: 25px;
+            padding: 15px;
+            background: #f8fafc;
+            border-radius: 8px;
+            white-space: pre-wrap;
+        }
+
+        #sources {
+            margin-top: 15px;
+        }
+
+        .source {
+            padding: 8px 0;
+            border-bottom: 1px solid #eee;
+        }
+
+        .error {
+            color: #b91c1c;
+        }
+    </style>
+
+</head>
+
+<body>
+    <div class="container">
+        <h1>🔐 Secure RAG Assistant</h1>
+
+        <div id="user">
+            Loading user...
+        </div>
+
+        <textarea id="question" placeholder="Ask a question..."></textarea>
+
+        <button onclick="askQuestion()">Ask</button>
+
+        <div id="answer"></div>
+
+        <div id="sources"></div>
+
+    </div>
+    <script> async function loadUser() { try { const response = await fetch("/me"); if (!response.ok) { document.getElementById("user").innerHTML = '<a href="/login">Login with Microsoft</a>'; return; } const user = await response.json(); document.getElementById("user").innerHTML = ` <strong>Logged in as:</strong> ${user.name}<br> <strong>Groups:</strong> ${user.groups.join(", ")} `; } catch (error) { document.getElementById("user").innerHTML = '<a href="/login">Login with Microsoft</a>'; } } async function askQuestion() { const question = document.getElementById("question").value.trim(); if (!question) { return; } document.getElementById("answer").textContent = "Thinking..."; document.getElementById("sources").innerHTML = ""; try { const response = await fetch("/ask", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question: question }) }); const data = await response.json(); if (!response.ok) { document.getElementById("answer").innerHTML = `<span class="error">${data.detail || "Request failed"}</span>`; return; } document.getElementById("answer").textContent = data.answer || "No answer found."; if (data.sources && data.sources.length > 0) { document.getElementById("sources").innerHTML = "<strong>Sources:</strong>" + data.sources.map(source => ` <div class="source"> 📄 ${source.title} </div> `).join(""); } } catch (error) { document.getElementById("answer").innerHTML = `<span class="error">Unable to contact the server.</span>`; } } loadUser(); </script>
+</body>
+
+</html>

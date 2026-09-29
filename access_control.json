@@ -1,0 +1,11 @@
+{
+  "hr": [
+    "company-handbook.md",
+    "employee-leave-policy.md",
+    "employee-benefits.md"
+  ],
+  "finance": [
+    "financial-planning-2026.md",
+    "budget-guidelines.md"
+  ]
+}
