@@ -11,7 +11,7 @@ load_dotenv()
 
 TENANT_ID = os.getenv("AZURE_TENANT_ID")
 
-API_AUDIENCE = "api://e9e64da9-5cdb-412e-9345-0b487fa416e9"
+API_AUDIENCE = os.getenv("AZURE_API_URI")
 
 REQUIRED_SCOPE = os.getenv("AZURE_SCOPE")
 

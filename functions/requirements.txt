@@ -1,0 +1,4 @@
+azure-identity
+azure-functions
+azure-storage-blob
+requests

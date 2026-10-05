@@ -4,3 +4,5 @@ __pycache__/
 *.pyc
 .venv/
 *.pem
+groups.json
+sync_state.json
