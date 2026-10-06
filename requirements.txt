@@ -8,7 +8,5 @@ requests
 itsdangerous
 openai
 azure-identity==1.25.3
-azure-functions
-azure-storage-blob
 
 
