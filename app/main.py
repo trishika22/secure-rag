@@ -5,21 +5,26 @@ from fastapi import FastAPI, Depends, Request
 from starlette.middleware.sessions import SessionMiddleware
 from urllib.parse import urlencode
 import re
-
+import logging
+import time
 from pydantic import BaseModel
 from app.auth import get_current_user
-
 from dotenv import load_dotenv
-
 from azure.identity import ClientSecretCredential, get_bearer_token_provider
 from openai import AzureOpenAI
-
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 
 
 load_dotenv()
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logger = logging.getLogger(__name__)
+logging.getLogger("azure").setLevel(logging.WARNING)
 
 SEARCH_ENDPOINT = os.getenv("AZURE_SEARCH_ENDPOINT")
 SEARCH_INDEX = os.getenv("AZURE_SEARCH_INDEX")
@@ -183,6 +188,7 @@ Context:
 User question:
 {request.question}
 """
+    start = time.perf_counter()
     response = openai_client.chat.completions.create(
         model=AZURE_OPENAI_DEPLOYMENT,
         messages=[
@@ -203,10 +209,18 @@ User question:
         ],
         max_completion_tokens=1000
     )
+    latency_ms = (time.perf_counter() - start) * 1000
 
-    print("FINISH:", response.choices[0].finish_reason)
-    print("USAGE:", response.usage)
+    logger.info(
+        "ask completed: finish=%s prompt_tokens=%s completion_tokens=%s total_tokens=%s latency_ms=%.0f",
+        response.choices[0].finish_reason,
+        response.usage.prompt_tokens,
+        response.usage.completion_tokens,
+        response.usage.total_tokens,
+        latency_ms,
+    )
 
+   
     answer = response.choices[0].message.content
 
     # 8. Return answer + sources
