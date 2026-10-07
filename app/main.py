@@ -1,20 +1,17 @@
 import os
 import requests
-import jwt
 from fastapi.responses import RedirectResponse
 from fastapi import FastAPI, Depends, Request
 from starlette.middleware.sessions import SessionMiddleware
-from starlette.requests import Request
 from urllib.parse import urlencode
-
+import re
+import logging
+import time
 from pydantic import BaseModel
 from app.auth import get_current_user
-
 from dotenv import load_dotenv
-
 from azure.identity import ClientSecretCredential, get_bearer_token_provider
 from openai import AzureOpenAI
-
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
@@ -22,12 +19,22 @@ from fastapi.responses import FileResponse
 
 load_dotenv()
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logger = logging.getLogger(__name__)
+logging.getLogger("azure").setLevel(logging.WARNING)
+
 SEARCH_ENDPOINT = os.getenv("AZURE_SEARCH_ENDPOINT")
 SEARCH_INDEX = os.getenv("AZURE_SEARCH_INDEX")
 SEARCH_API_KEY = os.getenv("AZURE_SEARCH_API_KEY")
 
 AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
 AZURE_OPENAI_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT")
+
+API_URI = os.getenv("AZURE_API_URI")
+LOGIN_SCOPE = f"openid profile email {API_URI}/access_as_user"
 
 credential = ClientSecretCredential(
     tenant_id=os.getenv("AZURE_TENANT_ID"),
@@ -54,6 +61,15 @@ app.add_middleware(
     https_only=False,
 )
 
+GUID = re.compile(r"^[0-9a-fA-F-]{36}$")
+
+
+def build_access_filter(groups):
+    """Chunks match if any of their groups is one of the user's groups."""
+    valid = [g for g in groups if GUID.match(g)]
+    if not valid:
+        return None
+    return f"access_groups/any(g: search.in(g, '{','.join(valid)}', ','))"
 
 class AskRequest(BaseModel):
     question: str
@@ -82,126 +98,6 @@ def me(user=Depends(get_current_user)):
         "scope": user.get("scp"),
     }
 
-@app.get("/test-filter")
-def test_filter(user=Depends(get_current_user)):
-    groups = user.get("groups", [])
-
-    search_filter = " or ".join(
-        f"access eq '{group_id}'"
-        for group_id in groups
-    )
-
-    return {
-        "user": user.get("name"),
-        "groups": groups,
-        "search_filter": search_filter
-    }
-
-@app.get("/test-search")
-def test_search(user=Depends(get_current_user)):
-    groups = user.get("groups", [])
-
-    search_filter = " or ".join(
-        f"access eq '{group_id}'"
-        for group_id in groups
-    )
-
-    search_url = (
-        f"{SEARCH_ENDPOINT}/indexes/"
-        f"{SEARCH_INDEX}/docs/search?api-version=2025-09-01"
-    )
-
-    search_body = {
-        "search": "*",
-        "filter": search_filter,
-        "top": 5,
-        "select": "chunk_id,parent_id,chunk,title,access"
-    }
-
-    search_headers = {
-        "Content-Type": "application/json",
-        "api-key": SEARCH_API_KEY
-    }
-
-    search_response = requests.post(
-        search_url,
-        headers=search_headers,
-        json=search_body
-    )
-
-    search_response.raise_for_status()
-
-    return {
-        "user": user.get("name"),
-        "groups": groups,
-        "filter": search_filter,
-        "results": search_response.json()["value"]
-    }
-
-@app.get("/test-rag-search")
-def test_rag_search(
-    question: str,
-    user=Depends(get_current_user)
-):
-    groups = user.get("groups", [])
-
-    search_filter = " or ".join(
-        f"access eq '{group_id}'"
-        for group_id in groups
-    )
-
-    search_url = (
-        f"{SEARCH_ENDPOINT}/indexes/"
-        f"{SEARCH_INDEX}/docs/search?api-version=2025-09-01"
-    )
-
-    search_body = {
-        "vectorQueries": [
-            {
-                "kind": "text",
-                "text": question,
-                "fields": "text_vector",
-                "k": 5
-            }
-        ],
-        "filter": search_filter,
-        "top": 5,
-        "select": "chunk_id,parent_id,chunk,title,access"
-    }
-
-
-    search_headers = {
-        "Content-Type": "application/json",
-        "api-key": SEARCH_API_KEY
-    }
-
-    search_response = requests.post(
-        search_url,
-        headers=search_headers,
-        json=search_body
-    )
-
-    search_response.raise_for_status()
-
-    results = search_response.json()["value"]
-
-    MIN_SCORE = 0.70
-
-    authorized_relevant_results = [
-        result
-        for result in results
-        if result.get("@search.score", 0) >= MIN_SCORE
-    ]
-
-    return {
-        "question": question,
-        "user": user.get("name"),
-        "groups": groups,
-        "filter": search_filter,
-        "results": authorized_relevant_results
-    }
-
-   
 @app.post("/ask")
 def ask(
     request: AskRequest,
@@ -210,18 +106,15 @@ def ask(
     # 1. Get user's groups
     groups = user.get("groups", [])
 
-    if not groups:
+    # 2. Build authorization filter. No valid groups means no search at all.
+    search_filter = build_access_filter(groups)
+
+    if search_filter is None:
         return {
             "question": request.question,
             "answer": "You don't have access to any documents.",
             "results": []
         }
-
-    # 2. Build authorization filter
-    search_filter = " or ".join(
-        f"access eq '{group_id}'"
-        for group_id in groups
-    )
 
     # 3. Search Azure AI Search
     search_url = (
@@ -240,7 +133,7 @@ def ask(
         ],
         "filter": search_filter,
         "top": 5,
-        "select": "chunk_id,parent_id,chunk,title,access"
+        "select": "chunk_id,parent_id,chunk,title,access_groups"
     }
 
     search_headers = {
@@ -295,33 +188,39 @@ Context:
 User question:
 {request.question}
 """
+    start = time.perf_counter()
     response = openai_client.chat.completions.create(
         model=AZURE_OPENAI_DEPLOYMENT,
         messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a secure enterprise RAG assistant. "
-                        "Answer the user's question ONLY using the provided context. "
-                        "Do not use outside knowledge or make up information. "
-                        "If the context does not contain enough information to answer, "
-                        "say: 'I couldn't find enough information in the documents you have access to.'"
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": prompt,
-                },
-            ]
-        ,
+            {
+                "role": "system",
+                "content": (
+                    "You are a secure enterprise RAG assistant. "
+                    "Answer the user's question ONLY using the provided context. "
+                    "Do not use outside knowledge or make up information. "
+                    "If the context does not contain enough information to answer, "
+                    "say: 'I couldn't find enough information in the documents you have access to.'"
+                ),
+            },
+            {
+                "role": "user",
+                "content": prompt,
+            },
+        ],
         max_completion_tokens=1000
     )
+    latency_ms = (time.perf_counter() - start) * 1000
 
-    print("FINISH:", response.choices[0].finish_reason)
-    print("CONTENT:", repr(response.choices[0].message.content))
-    print("USAGE:", response.usage)
+    logger.info(
+        "ask completed: finish=%s prompt_tokens=%s completion_tokens=%s total_tokens=%s latency_ms=%.0f",
+        response.choices[0].finish_reason,
+        response.usage.prompt_tokens,
+        response.usage.completion_tokens,
+        response.usage.total_tokens,
+        latency_ms,
+    )
 
-
+   
     answer = response.choices[0].message.content
 
     # 8. Return answer + sources
@@ -338,7 +237,6 @@ User question:
         ]
     }
 
-
 @app.get("/login")
 def login():
     tenant_id = os.getenv("AZURE_TENANT_ID")
@@ -350,10 +248,7 @@ def login():
         "response_type": "code",
         "redirect_uri": redirect_uri,
         "response_mode": "query",
-        "scope": (
-        "openid profile email "
-        "api://e9e64da9-5cdb-412e-9345-0b487fa416e9/access_as_user"),
-        "prompt": "consent",
+        "scope": LOGIN_SCOPE,
     }
 
     url = (
@@ -381,7 +276,7 @@ def auth_callback(request: Request, code: str):
         "grant_type": "authorization_code",
         "code": code,
         "redirect_uri": redirect_uri,
-        "scope": "openid profile email api://e9e64da9-5cdb-412e-9345-0b487fa416e9/access_as_user",
+        "scope": LOGIN_SCOPE,
     }
 
     response = requests.post(token_url, data=data)
@@ -403,14 +298,5 @@ def auth_callback(request: Request, code: str):
 
     request.session["access_token"] = access_token
 
-    return {
-    "message": "Login successful",
-    "session_has_token": "access_token" in request.session
-    }
-
-@app.get("/session")
-def session_check(request: Request):
-    return {
-        "has_access_token": "access_token" in request.session,
-        "session_secret_loaded": bool(os.getenv("SESSION_SECRET"))
-    }
+    # Signed in: send the user back to the app
+    return RedirectResponse("/")

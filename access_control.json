@@ -1,11 +1,7 @@
 {
-  "hr": [
-    "company-handbook.md",
-    "employee-leave-policy.md",
-    "employee-benefits.md"
-  ],
-  "finance": [
-    "financial-planning-2026.md",
-    "budget-guidelines.md"
-  ]
+  "company-handbook.md": ["hr"],
+  "employee-leave-policy.md": ["hr"],
+  "employee-benefits.md": ["hr"],
+  "financial-planning-2026.md": ["finance"],
+  "budget-guidelines.md": ["finance"]
 }
